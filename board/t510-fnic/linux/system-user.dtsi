@@ -1,0 +1,69 @@
+/ {
+	model = "T510 FNIC Zynq UltraScale+ RFSoC";
+	compatible = "xlnx,zynqmp-rfsoc", "xlnx,zynqmp", "xlnx,zynqmp-2022.2";
+
+	aliases {
+		mmc0 = &sdhci1;
+		mmc1 = &sdhci0;
+		serial0 = &uart1;
+		serial1 = &uart0;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		bootargs = "console=ttyPS0,115200 earlycon=cdns,mmio,0xff010000 root=/dev/ram0 rw clk_ignore_unused";
+	};
+};
+
+/*
+ * RFDC 参数节点由 DTG 根据 T510_FNIC XSA 自动生成。
+ * 用户态 RFDC 控制程序会从 usp_rf_data_converter 节点读取 param-list。
+ */
+
+&sdhci0 {
+	status = "okay";
+	bus-width = <8>;
+	non-removable;
+	disable-wp;
+};
+
+&sdhci1 {
+	status = "okay";
+	bus-width = <4>;
+	disable-wp;
+	no-1-8-v;
+	max-frequency = <50000000>;
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&spi1 {
+	status = "okay";
+	num-cs = <1>;
+
+	lmk04828@0 {
+		compatible = "rohm,dh2228fv";
+		status = "okay";
+		reg = <0>;
+		spi-max-frequency = <200000>;
+	};
+};
+
+&qspi {
+	status = "okay";
+	is-dual = <1>;
+	num-cs = <1>;
+	spi-rx-bus-width = <4>;
+	spi-tx-bus-width = <4>;
+
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <50000000>;
+		spi-rx-bus-width = <4>;
+		spi-tx-bus-width = <1>;
+		m25p,fast-read;
+	};
+};

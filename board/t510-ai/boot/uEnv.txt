@@ -1,0 +1,10 @@
+bootargs=console=ttyPS0,115200 earlycon=cdns,mmio,0xff010000 root=/dev/ram0 rw clk_ignore_unused
+bitstream_image=t510_ai_100g_full_system_top.bit
+bitstream_load_address=0x30000000
+kernel_image=Image
+devicetree_image=devicetree.dtb
+ramdisk_image=uramdisk.image.gz
+kernel_load_address=0x02000000
+ramdisk_load_address=0x04000000
+devicetree_load_address=0x10000000
+uenvcmd=echo Loading FPGA bitstream from SD...; if fatload mmc 0:1 ${bitstream_load_address} ${bitstream_image}; then if fpga loadb 0 ${bitstream_load_address} ${filesize}; then if fatload mmc 0:1 ${kernel_load_address} ${kernel_image}; then if fatload mmc 0:1 ${ramdisk_load_address} ${ramdisk_image}; then setenv ramdisk_size ${filesize}; if fatload mmc 0:1 ${devicetree_load_address} ${devicetree_image}; then booti ${kernel_load_address} ${ramdisk_load_address}:${ramdisk_size} ${devicetree_load_address}; fi; fi; fi; fi; fi

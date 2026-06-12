@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBMETAL
+	bool "libmetal"
+	help
+	  Xilinx libmetal userspace library built from embeddedsw.
+

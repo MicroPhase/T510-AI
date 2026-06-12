@@ -1,0 +1,23 @@
+clc;
+clear;
+close all;
+
+iq_file = '../iq_data.cs16';
+sample_rate_hz = 245.76e6;
+num_channels = 1;
+
+fprintf('Loading IQ data from %s ...\n', iq_file);
+
+addpath(fileparts(mfilename('fullpath')));
+
+result = analyze_t510_ai_iq( ...
+    iq_file, ...
+    sample_rate_hz, ...
+    num_channels, ...
+    'plot', true, ...
+    'plot_samples', 4096, ...
+    'fft_length', 65536, ...
+    'remove_dc', true);
+
+disp('Analysis finished.');
+disp(result);

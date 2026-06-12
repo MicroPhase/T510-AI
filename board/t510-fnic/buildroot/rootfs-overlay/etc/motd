@@ -1,0 +1,5 @@
+T510 FNIC RFSoC image
+
+RFDC control:
+  t510-fnic-rfdc
+  t510-fnic-rfdc --type adc --tile 0 --block 0 --freq 1850

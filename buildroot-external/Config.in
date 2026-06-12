@@ -1,0 +1,8 @@
+menu "MPSOC Image Builder packages"
+
+source "$BR2_EXTERNAL_MPSOC_IMAGE_BUILDER_PATH/package/libmetal/Config.in"
+source "$BR2_EXTERNAL_MPSOC_IMAGE_BUILDER_PATH/package/librfdc/Config.in"
+source "$BR2_EXTERNAL_MPSOC_IMAGE_BUILDER_PATH/package/t510-fnic-rfdc/Config.in"
+source "$BR2_EXTERNAL_MPSOC_IMAGE_BUILDER_PATH/package/rootfs-fixups/Config.in"
+
+endmenu

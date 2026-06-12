@@ -1,0 +1,43 @@
+#
+# Copyright 2018 Ettus Research, A National Instruments Company
+#
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+
+##################################################
+# RFNoC Utility Sources
+##################################################
+RFNOC_UTIL_SRCS = $(abspath $(addprefix $(BASE_DIR)/../lib/rfnoc/utils/, \
+chdr_trim_payload.v \
+chdr_pad_packet.v \
+chdr_resize.v \
+chdr_convert_up.v \
+chdr_convert_down.v \
+chdr_monitor.sv \
+chdr_channel_mux.sv \
+chdr_channel_demux.sv \
+context_handler_sync.v \
+context_builder.v \
+context_parser.v \
+ctrlport_timer.v \
+ctrlport_combiner.sv \
+ctrlport_decoder.sv \
+ctrlport_decoder_param.sv \
+ctrlport_window.sv \
+ctrlport_splitter.sv \
+ctrlport_resp_combine.v \
+ctrlport_clk_cross.sv \
+ctrlport_reg_rw.v \
+ctrlport_reg_ro.v \
+ctrlport_to_settings_bus.v \
+noc_shell_generic_ctrlport_pyld_chdr.v \
+timekeeper.v \
+ctrlport_terminator.sv \
+chdr_strip_header.sv \
+ctrlport_if_clk_cross.sv \
+ctrlport_if_combiner.sv \
+ctrlport_if_decoder.sv \
+ctrlport_if_splitter.sv \
+ctrlport_if_terminator.sv \
+ctrlport_if_window.sv \
+))

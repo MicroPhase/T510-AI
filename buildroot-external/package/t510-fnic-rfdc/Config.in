@@ -1,0 +1,5 @@
+config BR2_PACKAGE_T510_FNIC_RFDC
+	bool "t510-fnic-rfdc"
+	select BR2_PACKAGE_LIBMETAL
+	help
+	  T510_FNIC userspace RFDC/LMK control program.

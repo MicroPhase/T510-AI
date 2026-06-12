@@ -1,0 +1,12 @@
+.qoder/
+.vscode/
+artifacts/.tmp/
+vivado/project/
+top/t510_ai/build-ip/
+**/.Xil/
+**/xsim.dir/
+**/.xsim_*/
+*.jou
+*.log
+*.str
+hs_err_pid*.log

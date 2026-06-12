@@ -1,0 +1,64 @@
+// SPDX-License-Identifier: GPL-2.0+
+/dts-v1/;
+
+#include "zynqmp.dtsi"
+#include "zynqmp-clk-ccf.dtsi"
+
+/ {
+	model = "T510 AI Zynq UltraScale+ RFSoC";
+	compatible = "xlnx,zynqmp-t510-ai", "xlnx,zynqmp-rfsoc", "xlnx,zynqmp";
+
+	aliases {
+		ethernet0 = &gem3;
+		mmc0 = &sdhci1;
+		mmc1 = &sdhci0;
+		rtc0 = &rtc;
+		serial0 = &uart1;
+		serial1 = &uart0;
+		serial2 = &dcc;
+		spi0 = &qspi;
+	};
+
+	chosen {
+		bootargs = "earlycon";
+		stdout-path = "serial0:115200n8";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x0 0x0 0x80000000>, <0x8 0x00000000 0x0 0x80000000>;
+	};
+};
+
+&dcc {
+	status = "okay";
+};
+
+&gpio {
+	status = "okay";
+};
+
+&gem3 {
+	status = "okay";
+};
+
+&sdhci0 {
+	status = "okay";
+	bus-width = <8>;
+	non-removable;
+	disable-wp;
+};
+
+&sdhci1 {
+	status = "okay";
+	bus-width = <4>;
+	disable-wp;
+	no-1-8-v;
+	max-frequency = <50000000>;
+	u-boot,dm-pre-reloc;
+};
+
+&uart1 {
+	status = "okay";
+	u-boot,dm-pre-reloc;
+};

@@ -1,0 +1,26 @@
+From: T510-AI Builder <builder@example.com>
+Date: 2026-03-30
+Subject: Enable NI XGE Management Ethernet driver for T510-AI
+
+Enable CONFIG_NI_XGE_MANAGEMENT_ENET=y in xilinx_zynqmp_defconfig
+for National Instruments XGE management ethernet support.
+
+Signed-off-by: T510-AI Builder <builder@example.com>
+---
+ arch/arm64/configs/xilinx_zynqmp_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/xilinx_zynqmp_defconfig b/arch/arm64/configs/xilinx_zynqmp_defconfig
+index xxxxxxx..xxxxxxx 100644
+--- a/arch/arm64/configs/xilinx_zynqmp_defconfig
++++ b/arch/arm64/configs/xilinx_zynqmp_defconfig
+@@ -71,6 +71,7 @@ CONFIG_XILINX_AXI_EMAC=y
+ CONFIG_AMD_PHY=y
+ CONFIG_BROADCOM_PHY=y
+ CONFIG_BCM7XXX_PHY=y
++CONFIG_NI_XGE_MANAGEMENT_ENET=y
+ CONFIG_BCM87XX_PHY=y
+ CONFIG_CICADA_PHY=y
+ CONFIG_DAVICOM_PHY=y
+-- 
+2.xx.x

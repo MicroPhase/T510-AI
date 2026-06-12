@@ -1,0 +1,521 @@
+diff --git a/drivers/net/ethernet/ni/nixge.c b/drivers/net/ethernet/ni/nixge.c
+index 346145d31..2140b51ad 100644
+--- a/drivers/net/ethernet/ni/nixge.c
++++ b/drivers/net/ethernet/ni/nixge.c
+@@ -14,6 +14,7 @@
+ #include <linux/of_irq.h>
+ #include <linux/skbuff.h>
+ #include <linux/phy.h>
++#include <linux/phylink.h>
+ #include <linux/mii.h>
+ #include <linux/nvmem-consumer.h>
+ #include <linux/ethtool.h>
+@@ -81,6 +82,11 @@
+ #define NIXGE_ID_LED_CTL_EN	BIT(0)
+ #define NIXGE_ID_LED_CTL_VAL	BIT(1)
+ 
++#define NIXGE_INFO_MGT_PROTOCOL_MASK	0x0000FF00
++#define NIXGE_INFO_MGT_PROTOCOL_SHIFT 	0x8
++#define NIXGE_INFO_MGT_PROTOCOL_100GbE	0x5
++#define NIXGE_CTL_TX_GLOBAL_PAUSE 	BIT(24)
++
+ #define NIXGE_MDIO_CLAUSE45	BIT(12)
+ #define NIXGE_MDIO_CLAUSE22	0
+ #define NIXGE_MDIO_OP(n)     (((n) & 0x3) << 10)
+@@ -173,10 +179,8 @@ struct nixge_priv {
+ 	/* Connection to PHY device */
+ 	struct device_node *phy_node;
+ 	phy_interface_t		phy_mode;
+-
+-	int link;
+-	unsigned int speed;
+-	unsigned int duplex;
++	struct phylink *phylink;
++	struct phylink_config phylink_config;
+ 
+ 	/* MDIO bus data */
+ 	struct mii_bus *mii_bus;	/* MII bus reference */
+@@ -203,6 +207,8 @@ struct nixge_priv {
+ 
+ 	u32 coalesce_count_rx;
+ 	u32 coalesce_count_tx;
++
++	bool tx_pause_enable;
+ };
+ 
+ static void nixge_dma_write_reg(struct nixge_priv *priv, off_t offset, u32 val)
+@@ -408,32 +414,10 @@ static void __nixge_device_reset(struct nixge_priv *priv, off_t offset)
+ 		netdev_err(priv->ndev, "%s: DMA reset timeout!\n", __func__);
+ }
+ 
+-static void nixge_device_reset(struct net_device *ndev)
++static void nixge_device_reset(struct nixge_priv *priv)
+ {
+-	struct nixge_priv *priv = netdev_priv(ndev);
+-
+ 	__nixge_device_reset(priv, XAXIDMA_TX_CR_OFFSET);
+ 	__nixge_device_reset(priv, XAXIDMA_RX_CR_OFFSET);
+-
+-	if (nixge_hw_dma_bd_init(ndev))
+-		netdev_err(ndev, "%s: descriptor allocation failed\n",
+-			   __func__);
+-
+-	netif_trans_update(ndev);
+-}
+-
+-static void nixge_handle_link_change(struct net_device *ndev)
+-{
+-	struct nixge_priv *priv = netdev_priv(ndev);
+-	struct phy_device *phydev = ndev->phydev;
+-
+-	if (phydev->link != priv->link || phydev->speed != priv->speed ||
+-	    phydev->duplex != priv->duplex) {
+-		priv->link = phydev->link;
+-		priv->speed = phydev->speed;
+-		priv->duplex = phydev->duplex;
+-		phy_print_status(phydev);
+-	}
+ }
+ 
+ static void nixge_tx_skb_unmap(struct nixge_priv *priv,
+@@ -703,15 +687,15 @@ static irqreturn_t nixge_tx_irq(int irq, void *_ndev)
+ 	u32 cr;
+ 
+ 	status = nixge_dma_read_reg(priv, XAXIDMA_TX_SR_OFFSET);
++	if (!(status & XAXIDMA_IRQ_ALL_MASK))
++		return IRQ_NONE;
++
+ 	if (status & (XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK)) {
+ 		nixge_dma_write_reg(priv, XAXIDMA_TX_SR_OFFSET, status);
+ 		nixge_start_xmit_done(priv->ndev);
+ 		goto out;
+ 	}
+-	if (!(status & XAXIDMA_IRQ_ALL_MASK)) {
+-		netdev_err(ndev, "No interrupts asserted in Tx path\n");
+-		return IRQ_NONE;
+-	}
++
+ 	if (status & XAXIDMA_IRQ_ERROR_MASK) {
+ 		phys = nixge_hw_dma_bd_get_addr(&priv->tx_bd_v[priv->tx_bd_ci],
+ 						phys);
+@@ -747,6 +731,9 @@ static irqreturn_t nixge_rx_irq(int irq, void *_ndev)
+ 	u32 cr;
+ 
+ 	status = nixge_dma_read_reg(priv, XAXIDMA_RX_SR_OFFSET);
++	if (!(status & XAXIDMA_IRQ_ALL_MASK))
++		return IRQ_NONE;
++
+ 	if (status & (XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK)) {
+ 		/* Turn of IRQs because NAPI */
+ 		nixge_dma_write_reg(priv, XAXIDMA_RX_SR_OFFSET, status);
+@@ -758,10 +745,7 @@ static irqreturn_t nixge_rx_irq(int irq, void *_ndev)
+ 			__napi_schedule(&priv->napi);
+ 		goto out;
+ 	}
+-	if (!(status & XAXIDMA_IRQ_ALL_MASK)) {
+-		netdev_err(ndev, "No interrupts asserted in Rx path\n");
+-		return IRQ_NONE;
+-	}
++
+ 	if (status & XAXIDMA_IRQ_ERROR_MASK) {
+ 		phys = nixge_hw_dma_bd_get_addr(&priv->rx_bd_v[priv->rx_bd_ci],
+ 						phys);
+@@ -794,8 +778,7 @@ static void nixge_dma_err_handler(struct tasklet_struct *t)
+ 	struct nixge_tx_skb *tx_skb;
+ 	u32 cr, i;
+ 
+-	__nixge_device_reset(lp, XAXIDMA_TX_CR_OFFSET);
+-	__nixge_device_reset(lp, XAXIDMA_RX_CR_OFFSET);
++	nixge_device_reset(lp);
+ 
+ 	for (i = 0; i < TX_BD_NUM; i++) {
+ 		cur_p = &lp->tx_bd_v[i];
+@@ -866,17 +849,18 @@ static void nixge_dma_err_handler(struct tasklet_struct *t)
+ static int nixge_open(struct net_device *ndev)
+ {
+ 	struct nixge_priv *priv = netdev_priv(ndev);
+-	struct phy_device *phy;
++	int err;
+ 	int ret;
+ 
+-	nixge_device_reset(ndev);
++	nixge_device_reset(priv);
+ 
+-	phy = of_phy_connect(ndev, priv->phy_node,
+-			     &nixge_handle_link_change, 0, priv->phy_mode);
+-	if (!phy)
+-		return -ENODEV;
++	err = phylink_of_phy_connect(priv->phylink, priv->phy_node, 0);
++	if (err) {
++		netdev_err(ndev, "could not attach PHY: %d\n", err);
++		return err;
++	}
+ 
+-	phy_start(phy);
++	phylink_start(priv->phylink);
+ 
+ 	/* Enable tasklets for Axi DMA error handling */
+ 	tasklet_setup(&priv->dma_err_tasklet, nixge_dma_err_handler);
+@@ -884,23 +868,34 @@ static int nixge_open(struct net_device *ndev)
+ 	napi_enable(&priv->napi);
+ 
+ 	/* Enable interrupts for Axi DMA Tx */
+-	ret = request_irq(priv->tx_irq, nixge_tx_irq, 0, ndev->name, ndev);
++	ret = request_irq(priv->tx_irq, nixge_tx_irq, IRQF_SHARED, ndev->name,
++			  ndev);
+ 	if (ret)
+ 		goto err_tx_irq;
+ 	/* Enable interrupts for Axi DMA Rx */
+-	ret = request_irq(priv->rx_irq, nixge_rx_irq, 0, ndev->name, ndev);
++	ret = request_irq(priv->rx_irq, nixge_rx_irq, IRQF_SHARED, ndev->name,
++			  ndev);
+ 	if (ret)
+ 		goto err_rx_irq;
+ 
++	ret = nixge_hw_dma_bd_init(ndev);
++	if (ret) {
++		netdev_err(ndev, "%s: descriptor allocation failed\n", __func__);
++		goto err_bd_init;
++	}
++
++	netif_trans_update(ndev);
+ 	netif_start_queue(ndev);
+ 
+ 	return 0;
+ 
++err_bd_init:
++	free_irq(priv->rx_irq, ndev);
+ err_rx_irq:
+ 	free_irq(priv->tx_irq, ndev);
+ err_tx_irq:
+-	phy_stop(phy);
+-	phy_disconnect(phy);
++	phylink_stop(priv->phylink);
++	phylink_disconnect_phy(priv->phylink);
+ 	tasklet_kill(&priv->dma_err_tasklet);
+ 	netdev_err(ndev, "request_irq() failed\n");
+ 	return ret;
+@@ -914,10 +909,8 @@ static int nixge_stop(struct net_device *ndev)
+ 	netif_stop_queue(ndev);
+ 	napi_disable(&priv->napi);
+ 
+-	if (ndev->phydev) {
+-		phy_stop(ndev->phydev);
+-		phy_disconnect(ndev->phydev);
+-	}
++	phylink_stop(priv->phylink);
++	phylink_disconnect_phy(priv->phylink);
+ 
+ 	cr = nixge_dma_read_reg(priv, XAXIDMA_RX_CR_OFFSET);
+ 	nixge_dma_write_reg(priv, XAXIDMA_RX_CR_OFFSET,
+@@ -993,15 +986,17 @@ static void nixge_ethtools_get_drvinfo(struct net_device *ndev,
+ 	strlcpy(ed->bus_info, "platform", sizeof(ed->bus_info));
+ }
+ 
+-static int
+-nixge_ethtools_get_coalesce(struct net_device *ndev,
+-			    struct ethtool_coalesce *ecoalesce,
+-			    struct kernel_ethtool_coalesce *kernel_coal,
+-			    struct netlink_ext_ack *extack)
++static int nixge_ethtools_get_coalesce(struct net_device *ndev,
++				       struct ethtool_coalesce *ecoalesce,
++				       struct kernel_ethtool_coalesce *kernel_coal,
++				       struct netlink_ext_ack *extack)
+ {
+ 	struct nixge_priv *priv = netdev_priv(ndev);
+ 	u32 regval = 0;
+ 
++	(void)kernel_coal;
++	(void)extack;
++
+ 	regval = nixge_dma_read_reg(priv, XAXIDMA_RX_CR_OFFSET);
+ 	ecoalesce->rx_max_coalesced_frames = (regval & XAXIDMA_COALESCE_MASK)
+ 					     >> XAXIDMA_COALESCE_SHIFT;
+@@ -1011,14 +1006,16 @@ nixge_ethtools_get_coalesce(struct net_device *ndev,
+ 	return 0;
+ }
+ 
+-static int
+-nixge_ethtools_set_coalesce(struct net_device *ndev,
+-			    struct ethtool_coalesce *ecoalesce,
+-			    struct kernel_ethtool_coalesce *kernel_coal,
+-			    struct netlink_ext_ack *extack)
++static int nixge_ethtools_set_coalesce(struct net_device *ndev,
++				       struct ethtool_coalesce *ecoalesce,
++				       struct kernel_ethtool_coalesce *kernel_coal,
++				       struct netlink_ext_ack *extack)
+ {
+ 	struct nixge_priv *priv = netdev_priv(ndev);
+ 
++	(void)kernel_coal;
++	(void)extack;
++
+ 	if (netif_running(ndev)) {
+ 		netdev_err(ndev,
+ 			   "Please stop netif before applying configuration\n");
+@@ -1067,15 +1064,65 @@ static int nixge_ethtools_set_phys_id(struct net_device *ndev,
+ 	return 0;
+ }
+ 
++static int nixge_ethtool_set_link_ksettings(struct net_device *dev,
++				      const struct ethtool_link_ksettings *cmd)
++{
++	struct nixge_priv *priv = netdev_priv(dev);
++
++	return phylink_ethtool_ksettings_set(priv->phylink, cmd);
++}
++
++static int nixge_ethtool_get_link_ksettings(struct net_device *dev,
++				      struct ethtool_link_ksettings *cmd)
++{
++	struct nixge_priv *priv = netdev_priv(dev);
++
++	return phylink_ethtool_ksettings_get(priv->phylink, cmd);
++}
++
++static void nixge_ethtool_get_pauseparam(struct net_device *dev,
++		                        struct ethtool_pauseparam *pause)
++{
++	struct nixge_priv *priv = netdev_priv(dev);
++
++	pause->autoneg = AUTONEG_DISABLE;
++	pause->rx_pause = 0;
++	pause->tx_pause = priv->tx_pause_enable;
++}
++
++static int nixge_ethtool_set_pauseparam(struct net_device *dev,
++                                        struct ethtool_pauseparam *pause)
++{
++	struct nixge_priv *priv = netdev_priv(dev);
++	u32 ctrl = 0;
++	u32 mgt_protocol;
++	mgt_protocol = nixge_ctrl_read_reg(priv, NIXGE_REG_INFO);
++	mgt_protocol &= NIXGE_INFO_MGT_PROTOCOL_MASK;
++	mgt_protocol >>= NIXGE_INFO_MGT_PROTOCOL_SHIFT;
++	if (mgt_protocol == NIXGE_INFO_MGT_PROTOCOL_100GbE) {
++		if (pause->tx_pause) {
++			priv->tx_pause_enable = 1;
++			ctrl |= NIXGE_CTL_TX_GLOBAL_PAUSE;
++		} else {
++			priv->tx_pause_enable = 0;
++			ctrl &= ~NIXGE_CTL_TX_GLOBAL_PAUSE;
++		}
++		nixge_ctrl_write_reg(priv, NIXGE_REG_MAC_CTL, ctrl);
++	}
++	return 0;
++}
++
+ static const struct ethtool_ops nixge_ethtool_ops = {
+ 	.supported_coalesce_params = ETHTOOL_COALESCE_MAX_FRAMES,
+ 	.get_drvinfo    = nixge_ethtools_get_drvinfo,
+ 	.get_coalesce   = nixge_ethtools_get_coalesce,
+ 	.set_coalesce   = nixge_ethtools_set_coalesce,
+ 	.set_phys_id    = nixge_ethtools_set_phys_id,
+-	.get_link_ksettings     = phy_ethtool_get_link_ksettings,
+-	.set_link_ksettings     = phy_ethtool_set_link_ksettings,
++	.get_link_ksettings     = nixge_ethtool_get_link_ksettings,
++	.set_link_ksettings     = nixge_ethtool_set_link_ksettings,
+ 	.get_link		= ethtool_op_get_link,
++	.get_pauseparam         = nixge_ethtool_get_pauseparam,
++	.set_pauseparam         = nixge_ethtool_set_pauseparam,
+ };
+ 
+ static int nixge_mdio_read(struct mii_bus *bus, int phy_id, int reg)
+@@ -1229,6 +1276,8 @@ static int nixge_of_get_resources(struct platform_device *pdev)
+ {
+ 	const struct of_device_id *of_id;
+ 	enum nixge_version version;
++	struct resource *ctrlres;
++	struct resource *dmares;
+ 	struct net_device *ndev;
+ 	struct nixge_priv *priv;
+ 
+@@ -1240,17 +1289,23 @@ static int nixge_of_get_resources(struct platform_device *pdev)
+ 
+ 	version = (enum nixge_version)of_id->data;
+ 	if (version <= NIXGE_V2)
+-		priv->dma_regs = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
++		dmares = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+ 	else
+-		priv->dma_regs = devm_platform_ioremap_resource_byname(pdev, "dma");
++		dmares = platform_get_resource_byname(pdev, IORESOURCE_MEM,
++						      "dma");
++
++	priv->dma_regs = devm_ioremap_resource(&pdev->dev, dmares);
+ 	if (IS_ERR(priv->dma_regs)) {
+ 		netdev_err(ndev, "failed to map dma regs\n");
+ 		return PTR_ERR(priv->dma_regs);
+ 	}
+-	if (version <= NIXGE_V2)
++	if (version <= NIXGE_V2) {
+ 		priv->ctrl_regs = priv->dma_regs + NIXGE_REG_CTRL_OFFSET;
+-	else
+-		priv->ctrl_regs = devm_platform_ioremap_resource_byname(pdev, "ctrl");
++	} else {
++		ctrlres = platform_get_resource_byname(pdev, IORESOURCE_MEM,
++						       "ctrl");
++		priv->ctrl_regs = devm_ioremap_resource(&pdev->dev, ctrlres);
++	}
+ 	if (IS_ERR(priv->ctrl_regs)) {
+ 		netdev_err(ndev, "failed to map ctrl regs\n");
+ 		return PTR_ERR(priv->ctrl_regs);
+@@ -1258,11 +1313,94 @@ static int nixge_of_get_resources(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
++static void nixge_phylink_validate(struct phylink_config *config,
++				      unsigned long *supported,
++				      struct phylink_link_state *state)
++{
++	__ETHTOOL_DECLARE_LINK_MODE_MASK(mask) = { 0, };
++
++	/* We only support XGMII & GMII modes */
++	if (state->interface != PHY_INTERFACE_MODE_XGMII &&
++	    state->interface != PHY_INTERFACE_MODE_GMII) {
++		bitmap_zero(supported, __ETHTOOL_LINK_MODE_MASK_NBITS);
++		return;
++	}
++
++	phylink_set_port_modes(mask);
++
++	switch (state->speed) {
++	case 10000:
++		phylink_set(mask, 10000baseT_Full);
++		break;
++
++	case 1000:
++		phylink_set(mask, 1000baseT_Half);
++		phylink_set(mask, 1000baseT_Full);
++		break;
++
++	case 100:
++		phylink_set(mask, 100baseT_Half);
++		phylink_set(mask, 100baseT_Full);
++		break;
++
++	case 10:
++		phylink_set(mask, 10baseT_Half);
++		phylink_set(mask, 10baseT_Full);
++		break;
++	}
++
++	bitmap_and(supported, supported, mask,
++		   __ETHTOOL_LINK_MODE_MASK_NBITS);
++	bitmap_and(state->advertising, state->advertising, mask,
++		   __ETHTOOL_LINK_MODE_MASK_NBITS);
++}
++
++static void nixge_mac_pcs_get_state(struct phylink_config *config,
++				      struct phylink_link_state *state)
++{
++	/* Unsupported, do nothing */
++}
++
++static void nixge_mac_config(struct phylink_config *config, unsigned int mode,
++				      const struct phylink_link_state *state)
++{
++	/* nothing meaningful to do */
++}
++
++static void nixge_mac_an_restart(struct phylink_config *config)
++{
++	/* Unsupported, do nothing */
++}
++
++static void nixge_mac_link_down(struct phylink_config *config,
++				      unsigned int mode,
++				      phy_interface_t interface)
++{
++	/* nothing meaningful to do */
++}
++
++static void nixge_mac_link_up(struct phylink_config *config, struct phy_device *phy,
++				      unsigned int mode, phy_interface_t interface,
++				      int speed, int duplex, bool tx_pause, bool rx_pause)
++{
++	/* nothing meaningful to do */
++}
++
++static const struct phylink_mac_ops nixge_phylink_ops = {
++	.validate = nixge_phylink_validate,
++	.mac_pcs_get_state = nixge_mac_pcs_get_state,
++	.mac_config = nixge_mac_config,
++	.mac_an_restart = nixge_mac_an_restart,
++	.mac_link_down = nixge_mac_link_down,
++	.mac_link_up = nixge_mac_link_up,
++};
++
+ static int nixge_probe(struct platform_device *pdev)
+ {
+-	struct device_node *mn, *phy_node;
++	struct device_node *mn;
+ 	struct nixge_priv *priv;
+ 	struct net_device *ndev;
++	struct phylink *phylink;
+ 	const u8 *mac_addr;
+ 	int err;
+ 
+@@ -1282,7 +1420,7 @@ static int nixge_probe(struct platform_device *pdev)
+ 	ndev->max_mtu = NIXGE_JUMBO_MTU;
+ 
+ 	mac_addr = nixge_get_nvmem_address(&pdev->dev);
+-	if (mac_addr && is_valid_ether_addr(mac_addr)) {
++	if (!IS_ERR_OR_NULL(mac_addr) && is_valid_ether_addr(mac_addr)) {
+ 		ether_addr_copy(ndev->dev_addr, mac_addr);
+ 		kfree(mac_addr);
+ 	} else {
+@@ -1332,29 +1470,29 @@ static int nixge_probe(struct platform_device *pdev)
+ 		goto unregister_mdio;
+ 	}
+ 
+-	phy_node = of_parse_phandle(pdev->dev.of_node, "phy-handle", 0);
+-	if (!phy_node && of_phy_is_fixed_link(pdev->dev.of_node)) {
+-		err = of_phy_register_fixed_link(pdev->dev.of_node);
+-		if (err < 0) {
+-			netdev_err(ndev, "broken fixed-link specification\n");
+-			goto unregister_mdio;
+-		}
+-		phy_node = of_node_get(pdev->dev.of_node);
++	priv->phylink_config.dev = &ndev->dev;
++	priv->phylink_config.type = PHYLINK_NETDEV;
++
++	phylink = phylink_create(&priv->phylink_config, pdev->dev.fwnode, priv->phy_mode, &nixge_phylink_ops);
++	if (IS_ERR(phylink)) {
++		err = PTR_ERR(phylink);
++		goto unregister_mdio;
+ 	}
+-	priv->phy_node = phy_node;
++
++	priv->phy_node = pdev->dev.of_node;
++	priv->phylink = phylink;
++	priv->phylink_config.pcs_poll = true;
+ 
+ 	err = register_netdev(priv->ndev);
+ 	if (err) {
+ 		netdev_err(ndev, "register_netdev() error (%i)\n", err);
+-		goto free_phy;
++		goto destroy_phylink;
+ 	}
+ 
+ 	return 0;
+ 
+-free_phy:
+-	if (of_phy_is_fixed_link(pdev->dev.of_node))
+-		of_phy_deregister_fixed_link(pdev->dev.of_node);
+-	of_node_put(phy_node);
++destroy_phylink:
++	phylink_destroy(priv->phylink);
+ 
+ unregister_mdio:
+ 	if (priv->mii_bus)
+@@ -1373,9 +1511,7 @@ static int nixge_remove(struct platform_device *pdev)
+ 
+ 	unregister_netdev(ndev);
+ 
+-	if (of_phy_is_fixed_link(pdev->dev.of_node))
+-		of_phy_deregister_fixed_link(pdev->dev.of_node);
+-	of_node_put(priv->phy_node);
++	phylink_destroy(priv->phylink);
+ 
+ 	if (priv->mii_bus)
+ 		mdiobus_unregister(priv->mii_bus);

@@ -1,0 +1,3 @@
+name: MPSOC_IMAGE_BUILDER
+desc: External tree for the separated ZynqMP/RFSoC firmware build flow
+

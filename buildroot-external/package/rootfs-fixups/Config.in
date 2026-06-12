@@ -1,0 +1,4 @@
+config BR2_PACKAGE_ROOTFS_FIXUPS
+	bool "rootfs-fixups"
+	help
+	  Small target-finalize cleanup hooks used by this firmware builder.

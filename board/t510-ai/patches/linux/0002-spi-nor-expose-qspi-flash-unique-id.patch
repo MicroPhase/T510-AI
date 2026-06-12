@@ -1,0 +1,213 @@
+From: T510-AI Builder <builder@example.com>
+Date: 2026-04-03
+Subject: spi-nor: expose flash unique ID through sysfs
+
+Expose a `spi-nor/unique_id` sysfs attribute for common SPI NOR parts.
+Most vendors use the 0x4b Read Unique ID command, while Micron/ST N25Q
+parts expose their 17-byte UID in the extended READ ID (0x9f) output.
+In dual-parallel mode, the controller returns bytes from both flashes
+interleaved, so keep the first flash's byte lane and export that as the
+first chip's UID.
+
+This gives board software a stable per-board identifier that can be used
+to derive the management MAC address.
+
+Signed-off-by: T510-AI Builder <builder@example.com>
+---
+ drivers/mtd/spi-nor/sysfs.c | 180 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 180 insertions(+)
+
+diff --git a/drivers/mtd/spi-nor/sysfs.c b/drivers/mtd/spi-nor/sysfs.c
+index 9aec9d8a9..a5bb382dc 100644
+--- a/drivers/mtd/spi-nor/sysfs.c
++++ b/drivers/mtd/spi-nor/sysfs.c
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ 
++#include <linux/mtd/cfi.h>
+ #include <linux/mtd/spi-nor.h>
+ #include <linux/spi/spi.h>
+ #include <linux/spi/spi-mem.h>
+@@ -7,6 +8,16 @@
+ 
+ #include "core.h"
+ 
++#define SPINOR_OP_READ_UID		0x4b
++#define SPINOR_OP_READ_ID		0x9f
++#define SPI_NOR_READ_ID_LEN		20
++#define SPI_NOR_UNIQUE_ID_LEN		8
++#define SPI_NOR_UNIQUE_ID_LEN_MICRON	17
++#define SPI_NOR_UNIQUE_ID_MAX_LEN	SPI_NOR_UNIQUE_ID_LEN_MICRON
++
++/* Common JEDEC manufacturer ID for GigaDevice parts supporting 0x4b UID. */
++#define CFI_MFR_GIGADEVICE		0xc8
++
+ static ssize_t manufacturer_show(struct device *dev,
+ 				 struct device_attribute *attr, char *buf)
+ {
+@@ -40,10 +51,140 @@ static ssize_t jedec_id_show(struct device *dev,
+ }
+ static DEVICE_ATTR_RO(jedec_id);
+ 
++static bool spi_nor_supports_unique_id(struct spi_nor *nor)
++{
++	if (!nor->spimem)
++		return false;
++
++	switch (nor->spimem->device_id[0]) {
++	case CFI_MFR_AMIC:
++	case CFI_MFR_EON:
++	case CFI_MFR_MACRONIX:
++	case CFI_MFR_MICRON:
++	case CFI_MFR_PMC:
++	case CFI_MFR_ST:
++	case CFI_MFR_WINBOND:
++	case CFI_MFR_WINBND:
++	case CFI_MFR_GIGADEVICE:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static bool spi_nor_uses_read_id_unique_id(struct spi_nor *nor)
++{
++	switch (nor->spimem->device_id[0]) {
++	case CFI_MFR_MICRON:
++	case CFI_MFR_ST:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static size_t spi_nor_unique_id_len(struct spi_nor *nor)
++{
++	if (spi_nor_uses_read_id_unique_id(nor))
++		return SPI_NOR_UNIQUE_ID_LEN_MICRON;
++
++	return SPI_NOR_UNIQUE_ID_LEN;
++}
++
++static bool spi_nor_unique_id_is_invalid(const u8 *uid, size_t len)
++{
++	unsigned int i;
++	bool all_zero = true;
++	bool all_ff = true;
++
++	for (i = 0; i < len; i++) {
++		if (uid[i] != 0x00)
++			all_zero = false;
++		if (uid[i] != 0xff)
++			all_ff = false;
++	}
++
++	return all_zero || all_ff;
++}
++
++static int spi_nor_read_unique_id(struct spi_nor *nor, u8 *uid)
++{
++	u8 raw_uid[SPI_NOR_READ_ID_LEN * 2];
++	u8 lane_uid[SPI_NOR_READ_ID_LEN];
++	size_t uid_len = spi_nor_unique_id_len(nor);
++	unsigned int data_len = spi_nor_uses_read_id_unique_id(nor) ?
++				SPI_NOR_READ_ID_LEN :
++				SPI_NOR_UNIQUE_ID_LEN;
++	unsigned int raw_len = nor->isparallel ? data_len * 2 : data_len;
++	struct spi_mem_op op;
++	int ret;
++	unsigned int i;
++
++	if (!spi_nor_supports_unique_id(nor))
++		return -EOPNOTSUPP;
++
++	if (spi_nor_uses_read_id_unique_id(nor)) {
++		struct spi_mem_op read_id_op =
++			SPI_MEM_OP(SPI_MEM_OP_CMD(SPINOR_OP_READ_ID, 1),
++				   SPI_MEM_OP_NO_ADDR,
++				   SPI_MEM_OP_NO_DUMMY,
++				   SPI_MEM_OP_DATA_IN(raw_len, raw_uid, 1));
++
++		op = read_id_op;
++	} else {
++		struct spi_mem_op read_uid_op =
++			SPI_MEM_OP(SPI_MEM_OP_CMD(SPINOR_OP_READ_UID, 1),
++				   SPI_MEM_OP_NO_ADDR,
++				   SPI_MEM_OP_DUMMY(4, 1),
++				   SPI_MEM_OP_DATA_IN(raw_len, raw_uid, 1));
++
++		op = read_uid_op;
++	}
++
++	ret = spi_mem_exec_op(nor->spimem, &op);
++	if (ret)
++		return ret;
++
++	if (!nor->isparallel)
++		memcpy(lane_uid, raw_uid, data_len);
++	else
++		for (i = 0; i < data_len; i++)
++			lane_uid[i] = raw_uid[i * 2];
++
++	if (spi_nor_uses_read_id_unique_id(nor))
++		memcpy(uid, lane_uid + 3, uid_len);
++	else
++		memcpy(uid, lane_uid, uid_len);
++
++	if (spi_nor_unique_id_is_invalid(uid, uid_len))
++		return -ENODATA;
++
++	return 0;
++}
++
++static ssize_t unique_id_show(struct device *dev,
++			      struct device_attribute *attr, char *buf)
++{
++	struct spi_device *spi = to_spi_device(dev);
++	struct spi_mem *spimem = spi_get_drvdata(spi);
++	struct spi_nor *nor = spi_mem_get_drvdata(spimem);
++	u8 uid[SPI_NOR_UNIQUE_ID_MAX_LEN];
++	size_t uid_len = spi_nor_unique_id_len(nor);
++	int ret;
++
++	ret = spi_nor_read_unique_id(nor, uid);
++	if (ret)
++		return ret;
++
++	return sysfs_emit(buf, "%*phN\n", (int)uid_len, uid);
++}
++static DEVICE_ATTR_RO(unique_id);
++
+ static struct attribute *spi_nor_sysfs_entries[] = {
+ 	&dev_attr_manufacturer.attr,
+ 	&dev_attr_partname.attr,
+ 	&dev_attr_jedec_id.attr,
++	&dev_attr_unique_id.attr,
+ 	NULL
+ };
+ 
+@@ -80,8 +214,22 @@ static umode_t spi_nor_sysfs_is_bin_visible(struct kobject *kobj,
+ 	return 0;
+ }
+ 
++static umode_t spi_nor_sysfs_is_visible(struct kobject *kobj,
++					struct attribute *attr, int n)
++{
++	struct spi_device *spi = to_spi_device(kobj_to_dev(kobj));
++	struct spi_mem *spimem = spi_get_drvdata(spi);
++	struct spi_nor *nor = spi_mem_get_drvdata(spimem);
++
++	if (attr == &dev_attr_unique_id.attr && !spi_nor_supports_unique_id(nor))
++		return 0;
++
++	return attr->mode;
++}
++
+ static const struct attribute_group spi_nor_sysfs_group = {
+ 	.name		= "spi-nor",
++	.is_visible	= spi_nor_sysfs_is_visible,
+ 	.is_bin_visible	= spi_nor_sysfs_is_bin_visible,
+ 	.attrs		= spi_nor_sysfs_entries,
+ 	.bin_attrs	= spi_nor_sysfs_bin_entries,
+-- 
+2.34.1

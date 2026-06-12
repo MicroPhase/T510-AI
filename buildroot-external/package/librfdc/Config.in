@@ -1,0 +1,6 @@
+config BR2_PACKAGE_LIBRFDC
+	bool "librfdc"
+	depends on BR2_PACKAGE_LIBMETAL
+	help
+	  Xilinx RFDC userspace library built from embeddedsw.
+

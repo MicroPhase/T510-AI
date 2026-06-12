@@ -1,0 +1,26 @@
+From: T510-AI Builder <builder@example.com>
+Date: 2026-04-03
+Subject: Enable spidev for LMK04828 userspace initialization
+
+Enable CONFIG_SPI_SPIDEV=y in xilinx_zynqmp_defconfig so the board can
+expose PS SPI1 as /dev/spidev1.0 for LMK04828 userspace initialization.
+
+Signed-off-by: T510-AI Builder <builder@example.com>
+---
+ arch/arm64/configs/xilinx_zynqmp_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/xilinx_zynqmp_defconfig b/arch/arm64/configs/xilinx_zynqmp_defconfig
+index xxxxxxx..xxxxxxx 100644
+--- a/arch/arm64/configs/xilinx_zynqmp_defconfig
++++ b/arch/arm64/configs/xilinx_zynqmp_defconfig
+@@ -206,6 +206,7 @@ CONFIG_I2C_XILINX=y
+ CONFIG_I2C_SLAVE=y
+ CONFIG_I2C_SLAVE_EEPROM=y
+ CONFIG_SPI=y
++CONFIG_SPI_SPIDEV=y
+ CONFIG_SPI_CADENCE=y
+ CONFIG_SPI_XILINX=y
+ CONFIG_SPI_ZYNQMP_GQSPI=y
+-- 
+2.xx.x

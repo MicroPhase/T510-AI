@@ -1,0 +1,49 @@
+# Local build outputs and fetched upstream source trees
+/build/
+/.source-stamps/
+/buildroot-xilinx/
+/linux-xlnx/
+/u-boot-xlnx/
+/arm-trusted-firmware/
+/embeddedsw/
+/device-tree-xlnx/
+board/*/patches/autosave/
+local_factory_tools/
+board/t510-ai/apps/local_auth_secret.h
+
+# Vivado, Vitis and simulator generated files
+/.Xil/
+**/.Xil/
+**/vivado/project/
+**/top/*/build-ip/
+**/xsim.dir/
+**/xsim_work/
+**/.xsim_*/
+*.jou
+*.log
+*.str
+*.pb
+*.wdb
+*.dcp
+*.sdb
+*.runs/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.sim/
+
+# C/CMake and host-side build outputs
+**/build/
+**/build_asan/
+*.o
+*.a
+
+# Large local captures and debug output
+*.cs16
+debug_logs/
+
+# Editor and Python cache files
+.vscode/
+.qoder/
+__pycache__/
+*.pyc

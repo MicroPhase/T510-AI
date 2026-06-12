@@ -1,0 +1,109 @@
+/ {
+	model = "T510 AI Zynq UltraScale+ RFSoC";
+	compatible = "xlnx,zynqmp-rfsoc", "xlnx,zynqmp", "xlnx,zynqmp-2022.2";
+
+	aliases {
+		mmc0 = &sdhci1;
+		mmc1 = &sdhci0;
+		serial0 = &uart1;
+		serial1 = &uart0;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		bootargs = "console=ttyPS0,115200 earlycon=cdns,mmio,0xff010000 root=/dev/ram0 rw clk_ignore_unused";
+	};
+};
+
+/*
+ * 板级补丁只处理启动串口和 mmc alias。
+ * RFDC 的参数节点保持由 DTG 根据 XSA 自动生成，Linux 用户态 xrfdc
+ * 库会从 usp_rf_data_converter 节点的 param-list 读取配置。
+ */
+
+&sdhci0 {
+	status = "okay";
+	bus-width = <8>;
+	non-removable;
+	disable-wp;
+};
+
+&sdhci1 {
+	status = "okay";
+	bus-width = <4>;
+	disable-wp;
+	no-1-8-v;
+	max-frequency = <50000000>;
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&spi1 {
+	status = "okay";
+	num-cs = <1>;
+
+	lmk04828@0 {
+		compatible = "rohm,dh2228fv";
+		status = "okay";
+		reg = <0>;
+		spi-max-frequency = <200000>;
+	};
+};
+
+&qspi {
+	status = "okay";
+	is-dual = <1>;
+	num-cs = <1>;
+	spi-rx-bus-width = <4>;
+	spi-tx-bus-width = <4>;
+
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <50000000>;
+		spi-rx-bus-width = <4>;
+		spi-tx-bus-width = <1>;
+		m25p,fast-read;
+	};
+};
+
+
+/delete-node/ &axi_dma_0;
+
+&amba_pl {
+    #address-cells = <2>;
+	#size-cells = <2>;
+
+	nixge0: ethernet@a0000000{
+		compatible = "ni,xge-enet-3.00";
+		reg = <0x00 0xA0000000 0x0 0x4000
+			   0x00 0xA0008000 0x0 0x2000>;
+		reg-names = "dma", "ctrl";
+
+		interrupts = <0 91 4 0 92 4>;
+		interrupt-names = "rx", "tx";
+		interrupt-parent = <&gic>;
+
+		// nvmem-cells = <&eth1_addr>;
+		// nvmem-cell-names = "address";
+
+		status = "okay";
+
+		phy-mode = "internal";
+
+		fixed-link {
+			speed = <100000>;
+			full-duplex;
+			link-gpios = <&gpio 94 0>;
+		};
+	};
+
+	misc_enet_regs_0: uio@a000A000 {
+		status = "okay";
+		compatible = "generic-uio";
+		reg = <0x00 0xA000A000 0x0 0x2000>;
+		reg-names = "misc-enet-regs0";
+	};
+};
