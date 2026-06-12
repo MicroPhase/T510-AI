@@ -1,58 +1,125 @@
-# T510-AI Customer Package
+# T510-AI Image Builder
 
-这个仓库整理了 T510-AI / T510-FNIC 相关的 FPGA、板级 Linux 镜像构建配置、Buildroot external package，以及 T510-AI DPDK GUI 上位机源码。
+This repository contains the board support files, hardware artifacts, Buildroot
+configuration, and helper scripts used to build bootable SD-card images for the
+T510-AI and T510-FNIC boards.
 
-## 目录入口
+Only this top-level README is maintained for now. More detailed documentation
+for the individual hardware, board, and host application areas will be added
+later.
 
-- `hdl/t510_ai/`: T510-AI 100G FPGA 工程源码、Vivado 重建脚本和已验证硬件导出物。
-- `hdl/t510_fnic/`: T510-FNIC Aurora bring-up FPGA 工程源码、Vivado 重建脚本和硬件导出物。
-- `board/t510-ai/`: T510-AI PS 侧镜像构建配置、设备树补充、U-Boot 配置、Buildroot 配置和板端工具。
-- `board/t510-fnic/`: T510-FNIC PS 侧镜像构建配置和 RFDC 控制程序。
-- `buildroot-external/`: Buildroot external tree，包含 T510/FNIC 镜像需要的本地 package。
-- `host_app/T510_AI_DPDK/`: T510-AI GUI 上位机和 DPDK 数据面源码。
-- `scripts/`: 镜像构建、Xilinx 工具调用、QSPI/SD 包装等公共脚本。
+## Supported Boards
 
-## 快速开始
+- `t510-ai`
+- `t510-fnic`
 
-构建 T510-AI 镜像：
+You can list the boards known to the build system with:
 
 ```bash
-export VIVADO_SETTINGS=/opt/Xilinx/Vivado/2022.2/settings64.sh
-make fetch BOARD=t510-ai
-make BOARD=t510-ai
+make list-boards
 ```
 
-构建 T510-FNIC SD 启动文件：
+## Prerequisites
+
+The build expects the Xilinx 2022.2 tools to be installed and available on the
+host machine. The Makefile uses Vivado/Vitis utilities such as `bootgen` and the
+cross-compilers from the generated Buildroot host tree.
+
+Set the Xilinx environment before building:
 
 ```bash
 export VIVADO_SETTINGS=/opt/Xilinx/Vivado/2022.2/settings64.sh
-make fetch BOARD=t510-fnic
+```
+
+If your installation path is different, point `VIVADO_SETTINGS` at the matching
+`settings64.sh` file.
+
+## Fetch External Sources
+
+The Linux, U-Boot, Buildroot, ARM Trusted Firmware, embeddedsw, and
+device-tree-xlnx source trees are shared build inputs. Fetch them before the
+first build:
+
+```bash
+make BOARD=t510-ai fetch
+```
+
+When switching boards after one board has already patched the shared source
+trees, reset and fetch for the target board:
+
+```bash
+make BOARD=t510-fnic reset-sources
+make BOARD=t510-fnic fetch
+```
+
+## Build the T510-AI SD Image
+
+Build the SD-card boot files for T510-AI with:
+
+```bash
+make BOARD=t510-ai sd
+```
+
+The output is written to:
+
+```text
+build/t510-ai/sd/
+```
+
+Typical files in that directory include `BOOT.BIN`, `Image`, `uEnv.txt`,
+the device tree blob, and the compressed root filesystem image.
+
+## Build the T510-FNIC SD Image
+
+Build the SD-card boot files for T510-FNIC with:
+
+```bash
 make BOARD=t510-fnic sd
 ```
 
-重建 FPGA 工程：
+The output is written to:
 
-```bash
-cd hdl/t510_ai
-./scripts/recreate_vivado_project.sh
-
-cd ../t510_fnic
-./scripts/recreate_vivado_project.sh
+```text
+build/t510-fnic/sd/
 ```
 
-构建 GUI 上位机：
+Typical files in that directory include `BOOT.BIN`, `Image`, `uEnv.txt`,
+the device tree blob, and the compressed root filesystem image.
+
+## Useful Build Commands
+
+Show the resolved configuration for a board:
 
 ```bash
-cd host_app/T510_AI_DPDK
-./tools/build_release.sh
+make BOARD=t510-ai show-config
+make BOARD=t510-fnic show-config
 ```
 
-## 交付范围
+Build the default full image set for a board:
 
-仓库保留了源码、脚本、板级配置、补丁和必要的 T510-AI / T510-FNIC bit/xsa/ltx 硬件导出物。以下内容不会纳入版本管理，需要按需重新生成或由 `make fetch` 获取：
+```bash
+make BOARD=t510-ai
+make BOARD=t510-fnic
+```
 
-- Linux、U-Boot、Buildroot、ATF、embeddedsw、device-tree-xlnx 等外部源码树。
-- `build/`、Vivado `vivado/project/`、`.Xil/`、xsim、CMake build 等生成目录。
-- 本地 IQ 录波、调试日志和 host 侧编译产物。
+Remove generated outputs:
 
-更详细的板级使用说明见 `board/t510-ai/README.md` 和 `board/t510-fnic/README.md`。
+```bash
+make BOARD=t510-ai clean
+make BOARD=t510-fnic clean
+```
+
+Remove generated outputs and fetched external source trees:
+
+```bash
+make distclean
+```
+
+## Notes
+
+- Use `BOARD=t510-ai` or `BOARD=t510-fnic` on every command that depends on the
+  target board.
+- The SD image target assembles boot files under `build/<board>/sd/`; it does
+  not write directly to an SD card.
+- Generated directories such as `build/`, `.Xil/`, Vivado project output, and
+  Buildroot output should not be committed.
